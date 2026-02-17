@@ -151,33 +151,71 @@ CREATE INDEX idx_trades_user ON trades_view(buyer_id, executed_at DESC);
 
 ### ✅ 3. Immutable Domain Model
 
-Use Java records for all domain objects:
+Use **Immutables library** with **Guava collections** for all domain objects:
 
 ```java
-public record Order(
-    OrderId id,
-    UserId userId,
-    Symbol symbol,
-    Side side,
-    OrderType type,
-    BigDecimal price,
-    BigDecimal quantity,
-    BigDecimal filledQuantity,
-    OrderStatus status,
-    Instant createdAt
-) {
-    public Order withFilled(BigDecimal newFilled) {
-        return new Order(id, userId, symbol, side, type, price,
-                        quantity, newFilled, status, createdAt);
+@Value.Immutable
+@JsonSerialize(as = ImmutableOrder.class)
+@JsonDeserialize(as = ImmutableOrder.class)
+public interface Order {
+    OrderId getId();
+    UserId getUserId();
+    Symbol getSymbol();
+    Side getSide();
+    OrderType getType();
+    BigDecimal getPrice();
+    BigDecimal getQuantity();
+    BigDecimal getFilledQuantity();
+    OrderStatus getStatus();
+    Instant getCreatedAt();
+
+    // Builder support for "with" methods
+    default Order withFilledQuantity(BigDecimal newFilled) {
+        return ImmutableOrder.copyOf(this)
+            .withFilledQuantity(newFilled);
     }
 }
+
+// Usage:
+Order order = ImmutableOrder.builder()
+    .id(orderId)
+    .userId(userId)
+    .symbol(symbol)
+    .side(Side.BUY)
+    .type(OrderType.LIMIT)
+    .price(new BigDecimal("50000.00"))
+    .quantity(new BigDecimal("1.5"))
+    .filledQuantity(BigDecimal.ZERO)
+    .status(OrderStatus.OPEN)
+    .createdAt(Instant.now())
+    .build();
+```
+
+**Collections - Use Guava Immutables:**
+```java
+// Instead of List<Order> → use ImmutableList<Order>
+ImmutableList<Order> orders = ImmutableList.of(order1, order2);
+
+// Instead of Map<Symbol, OrderBook> → use ImmutableMap
+ImmutableMap<Symbol, OrderBook> books = ImmutableMap.of(
+    symbol1, orderBook1,
+    symbol2, orderBook2
+);
+
+// For building collections:
+ImmutableList<Trade> trades = ImmutableList.<Trade>builder()
+    .add(trade1)
+    .add(trade2)
+    .build();
 ```
 
 **Why:**
 - Thread-safe by default
 - No accidental mutation
-- Easy to reason about
+- Builder pattern (easier than constructors)
+- Works seamlessly with Jackson for JSON serialization
 - Excellent for concurrent systems
+- Guava collections provide immutability guarantees
 
 ### ✅ 4. Aggregate Root = OrderBook per Symbol
 
@@ -186,21 +224,34 @@ public record Order(
 ```java
 public class OrderBookAggregate {
     private final Symbol symbol;
-    private final NavigableMap<BigDecimal, List<Order>> bids;  // Descending
-    private final NavigableMap<BigDecimal, List<Order>> asks;  // Ascending
+    // Internal mutable state (not exposed)
+    private final TreeMap<BigDecimal, LinkedList<Order>> bids;  // Descending
+    private final TreeMap<BigDecimal, LinkedList<Order>> asks;  // Ascending
     private int version;
 
-    public List<DomainEvent> handle(PlaceOrderCommand cmd) {
+    public ImmutableList<DomainEvent> handle(PlaceOrderCommand cmd) {
         // 1. Validate
         // 2. Add to book
         // 3. Match
-        // 4. Return events
+        // 4. Return immutable list of events
+        return ImmutableList.of(/* events */);
+    }
+
+    // Query methods return immutable copies
+    public ImmutableList<Order> getBids() {
+        return ImmutableList.copyOf(
+            bids.values().stream()
+                .flatMap(List::stream)
+                .collect(Collectors.toList())
+        );
     }
 }
 ```
 
 **Concurrency Strategy:**
 - One aggregate instance per symbol loaded into memory
+- Internal state is mutable (for performance) but never exposed
+- All public methods return immutable collections (Guava)
 - Optimistic locking using version number
 - Commands processed sequentially per aggregate (single-threaded)
 - Different symbols can process in parallel
@@ -228,19 +279,23 @@ Projections (async update)
 **Key Interfaces:**
 
 ```java
+// Marker interface for commands
 public interface Command {
-    AggregateId aggregateId();
+    AggregateId getAggregateId();
 }
 
+// Marker interface for domain events
 public interface DomainEvent {
-    UUID eventId();
-    AggregateId aggregateId();
-    Instant occurredAt();
+    UUID getEventId();
+    AggregateId getAggregateId();
+    Instant getOccurredAt();
 }
 
+// Event Store interface using Guava collections
 public interface EventStore {
-    void save(AggregateId id, List<DomainEvent> events, int expectedVersion);
-    List<DomainEvent> loadEvents(AggregateId id);
+    void save(AggregateId id, ImmutableList<DomainEvent> events, int expectedVersion);
+    ImmutableList<DomainEvent> loadEvents(AggregateId id);
+    ImmutableList<DomainEvent> loadAllEvents();
 }
 ```
 
@@ -311,14 +366,16 @@ CREATE TABLE snapshots (
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| Language | Java 21 | Records, pattern matching, virtual threads |
+| Language | Java 21 | Pattern matching, virtual threads, sealed classes |
+| Immutability | Immutables (org.immutables:value) | Generate immutable value objects with builders |
+| Collections | Guava | ImmutableList, ImmutableMap, ImmutableSet |
 | Framework | Spring Boot 3.2+ | REST, DI (infrastructure only) |
 | Database | PostgreSQL 16 | Event store + projections |
 | Migration | Flyway | Schema versioning |
 | Messaging | Kafka | External event publishing (Iteration 9) |
 | Testing | JUnit 5, AssertJ, Testcontainers | Unit + integration tests |
-| Build | Maven / Gradle | Dependency management |
-| JSON | Jackson | Event serialization |
+| Build | Maven | Multi-module dependency management |
+| JSON | Jackson | Event serialization (works with Immutables) |
 
 ---
 
@@ -329,21 +386,27 @@ CREATE TABLE snapshots (
 **Goal:** Build core domain logic with zero dependencies.
 
 **Deliverables:**
-1. **Domain Objects** (records):
-   - `OrderId`, `UserId`, `Symbol`, `Side`, `OrderType`, `OrderStatus`
-   - `Order`
-   - `Trade`
+1. **Domain Objects** (Immutables + Guava):
+   - `OrderId`, `UserId`, `Symbol` - value objects using @Value.Immutable
+   - `Side`, `OrderType`, `OrderStatus` - enums
+   - `Order` - @Value.Immutable interface
+   - `Trade` - @Value.Immutable interface
 
 2. **OrderBook Class:**
    ```java
    public class OrderBook {
        private final Symbol symbol;
-       private final NavigableMap<BigDecimal, Queue<Order>> bids;
-       private final NavigableMap<BigDecimal, Queue<Order>> asks;
+       // Internal mutable state for performance
+       private final TreeMap<BigDecimal, LinkedList<Order>> bids;  // Descending
+       private final TreeMap<BigDecimal, LinkedList<Order>> asks;  // Ascending
 
        public MatchResult addOrder(Order order);
        public boolean cancelOrder(OrderId orderId);
-       public List<Trade> match(Order incomingOrder);
+       public ImmutableList<Trade> match(Order incomingOrder);
+
+       // Query methods return immutable collections
+       public ImmutableList<Order> getBids();
+       public ImmutableList<Order> getAsks();
    }
    ```
 
@@ -387,48 +450,80 @@ src/main/java/
 
 1. **Command Objects:**
    ```java
-   public record PlaceOrderCommand(
-       OrderId orderId,
-       UserId userId,
-       Symbol symbol,
-       Side side,
-       BigDecimal price,
-       BigDecimal quantity
-   ) implements Command {}
+   @Value.Immutable
+   @JsonSerialize(as = ImmutablePlaceOrderCommand.class)
+   @JsonDeserialize(as = ImmutablePlaceOrderCommand.class)
+   public interface PlaceOrderCommand extends Command {
+       OrderId getOrderId();
+       UserId getUserId();
+       Symbol getSymbol();
+       Side getSide();
+       BigDecimal getPrice();
+       BigDecimal getQuantity();
 
-   public record CancelOrderCommand(
-       OrderId orderId,
-       UserId userId
-   ) implements Command {}
+       @Override
+       default AggregateId getAggregateId() {
+           return AggregateId.of(getSymbol());
+       }
+   }
+
+   @Value.Immutable
+   public interface CancelOrderCommand extends Command {
+       OrderId getOrderId();
+       UserId getUserId();
+       Symbol getSymbol();
+
+       @Override
+       default AggregateId getAggregateId() {
+           return AggregateId.of(getSymbol());
+       }
+   }
    ```
 
 2. **Domain Events:**
    ```java
-   public record OrderPlacedEvent(
-       UUID eventId,
-       OrderId orderId,
-       UserId userId,
-       Symbol symbol,
-       Side side,
-       BigDecimal price,
-       BigDecimal quantity,
-       Instant occurredAt
-   ) implements DomainEvent {}
+   @Value.Immutable
+   @JsonSerialize(as = ImmutableOrderPlacedEvent.class)
+   @JsonDeserialize(as = ImmutableOrderPlacedEvent.class)
+   public interface OrderPlacedEvent extends DomainEvent {
+       UUID getEventId();
+       OrderId getOrderId();
+       UserId getUserId();
+       Symbol getSymbol();
+       Side getSide();
+       BigDecimal getPrice();
+       BigDecimal getQuantity();
+       Instant getOccurredAt();
 
-   public record TradeExecutedEvent(
-       UUID eventId,
-       Symbol symbol,
-       OrderId makerOrderId,
-       OrderId takerOrderId,
-       UserId makerId,
-       UserId takerId,
-       BigDecimal price,
-       BigDecimal quantity,
-       Instant occurredAt
-   ) implements DomainEvent {}
+       @Override
+       default AggregateId getAggregateId() {
+           return AggregateId.of(getSymbol());
+       }
+   }
 
-   public record OrderCancelledEvent(...) implements DomainEvent {}
-   public record OrderFilledEvent(...) implements DomainEvent {}
+   @Value.Immutable
+   public interface TradeExecutedEvent extends DomainEvent {
+       UUID getEventId();
+       Symbol getSymbol();
+       OrderId getMakerOrderId();
+       OrderId getTakerOrderId();
+       UserId getMakerId();
+       UserId getTakerId();
+       BigDecimal getPrice();
+       BigDecimal getQuantity();
+       Instant getOccurredAt();
+
+       @Override
+       default AggregateId getAggregateId() {
+           return AggregateId.of(getSymbol());
+       }
+   }
+
+   @Value.Immutable
+   public interface OrderCancelledEvent extends DomainEvent { /* ... */ }
+
+   @Value.Immutable
+   public interface OrderFilledEvent extends DomainEvent { /* ... */ }
    ```
 
 3. **OrderBookAggregate:**
@@ -438,14 +533,19 @@ src/main/java/
        private final OrderBook orderBook;
        private int version = 0;
 
-       public List<DomainEvent> handle(PlaceOrderCommand cmd) {
+       public ImmutableList<DomainEvent> handle(PlaceOrderCommand cmd) {
            // Business logic + validation
-           // Return events (don't mutate state yet)
+           // Return immutable list of events (don't mutate state yet)
+           return ImmutableList.<DomainEvent>builder()
+               .add(orderPlacedEvent)
+               .addAll(tradeEvents)
+               .build();
        }
 
        public void apply(DomainEvent event) {
            // Apply event to internal state
            // Used during replay
+           version++;
        }
    }
    ```
@@ -472,17 +572,27 @@ src/main/java/
    ```java
    public interface EventStore {
        void save(AggregateId aggregateId,
-                 List<DomainEvent> events,
+                 ImmutableList<DomainEvent> events,
                  int expectedVersion);
-       List<DomainEvent> loadEvents(AggregateId aggregateId);
-       List<DomainEvent> loadAllEvents();
+       ImmutableList<DomainEvent> loadEvents(AggregateId aggregateId);
+       ImmutableList<DomainEvent> loadAllEvents();
    }
    ```
 
 2. **In-Memory Implementation:**
    ```java
    public class InMemoryEventStore implements EventStore {
-       private final Map<AggregateId, List<StoredEvent>> eventStreams;
+       // Internal mutable map for storage
+       private final Map<AggregateId, List<StoredEvent>> eventStreams = new ConcurrentHashMap<>();
+
+       @Override
+       public ImmutableList<DomainEvent> loadEvents(AggregateId aggregateId) {
+           List<StoredEvent> events = eventStreams.getOrDefault(aggregateId, List.of());
+           return ImmutableList.copyOf(events.stream()
+               .map(StoredEvent::getEvent)
+               .collect(Collectors.toList()));
+       }
+
        // Optimistic locking check on save()
    }
    ```
@@ -490,7 +600,11 @@ src/main/java/
 3. **Event Dispatcher:**
    ```java
    public class EventDispatcher {
-       private final List<EventListener> listeners;
+       private final ImmutableList<EventListener> listeners;
+
+       public EventDispatcher(ImmutableList<EventListener> listeners) {
+           this.listeners = listeners;
+       }
 
        public void dispatch(DomainEvent event) {
            listeners.forEach(l -> l.handle(event));
@@ -502,16 +616,17 @@ src/main/java/
    ```java
    public class OrderBookRepository {
        private final EventStore eventStore;
+       private final EventDispatcher eventDispatcher;
 
        public OrderBookAggregate load(Symbol symbol) {
-           List<DomainEvent> events = eventStore.loadEvents(symbol);
+           ImmutableList<DomainEvent> events = eventStore.loadEvents(symbol);
            OrderBookAggregate aggregate = new OrderBookAggregate(symbol);
            events.forEach(aggregate::apply);
            return aggregate;
        }
 
        public void save(OrderBookAggregate aggregate,
-                       List<DomainEvent> newEvents) {
+                       ImmutableList<DomainEvent> newEvents) {
            eventStore.save(aggregate.getId(), newEvents, aggregate.getVersion());
            newEvents.forEach(eventDispatcher::dispatch);
        }
@@ -581,28 +696,34 @@ src/main/java/
 
        @Transactional
        public OrderId placeOrder(PlaceOrderCommand command) {
-           OrderBookAggregate aggregate = repository.load(command.symbol());
-           List<DomainEvent> events = aggregate.handle(command);
+           OrderBookAggregate aggregate = repository.load(command.getSymbol());
+           ImmutableList<DomainEvent> events = aggregate.handle(command);
            repository.save(aggregate, events);
-           return command.orderId();
+           return command.getOrderId();
        }
    }
    ```
 
-4. **DTOs (input/output):**
+4. **DTOs (input/output) - Use Immutables for REST DTOs too:**
    ```java
-   public record PlaceOrderRequest(
-       @NotNull String symbol,
-       @NotNull String side,
-       @NotNull @Positive BigDecimal price,
-       @NotNull @Positive BigDecimal quantity
-   ) {}
+   @Value.Immutable
+   @JsonSerialize(as = ImmutablePlaceOrderRequest.class)
+   @JsonDeserialize(as = ImmutablePlaceOrderRequest.class)
+   public interface PlaceOrderRequest {
+       @NotNull String getSymbol();
+       @NotNull String getSide();
+       @NotNull @Positive BigDecimal getPrice();
+       @NotNull @Positive BigDecimal getQuantity();
+   }
 
-   public record OrderResponse(
-       String orderId,
-       String status,
-       Instant createdAt
-   ) {}
+   @Value.Immutable
+   @JsonSerialize(as = ImmutableOrderResponse.class)
+   @JsonDeserialize(as = ImmutableOrderResponse.class)
+   public interface OrderResponse {
+       String getOrderId();
+       String getStatus();
+       Instant getCreatedAt();
+   }
    ```
 
 5. **Query Endpoints (read from in-memory projection):**
@@ -691,17 +812,41 @@ src/main/java/
        private final ObjectMapper objectMapper;  // Jackson for JSON
 
        @Override
-       public void save(AggregateId id, List<DomainEvent> events, int expectedVersion) {
+       public void save(AggregateId id, ImmutableList<DomainEvent> events, int expectedVersion) {
            // 1. Check version (optimistic locking)
+           int currentVersion = getCurrentVersion(id);
+           if (currentVersion != expectedVersion) {
+               throw new ConcurrencyException("Version mismatch");
+           }
+
            // 2. Insert events with version = expectedVersion + 1, + 2, ...
-           // 3. Handle unique constraint violation → throw ConcurrencyException
+           int version = expectedVersion;
+           for (DomainEvent event : events) {
+               version++;
+               String eventType = event.getClass().getName();
+               String eventData = objectMapper.writeValueAsString(event);
+
+               jdbcTemplate.update(
+                   "INSERT INTO events (aggregate_id, aggregate_type, event_type, event_data, version, timestamp) " +
+                   "VALUES (?, ?, ?, ?::jsonb, ?, ?)",
+                   id.getValue(), id.getType(), eventType, eventData, version, event.getOccurredAt()
+               );
+           }
        }
 
        @Override
-       public List<DomainEvent> loadEvents(AggregateId id) {
-           // SELECT event_type, event_data FROM events
-           // WHERE aggregate_id = ? ORDER BY version ASC
-           // Deserialize JSON → DomainEvent
+       public ImmutableList<DomainEvent> loadEvents(AggregateId id) {
+           List<DomainEvent> events = jdbcTemplate.query(
+               "SELECT event_type, event_data FROM events " +
+               "WHERE aggregate_id = ? ORDER BY version ASC",
+               (rs, rowNum) -> {
+                   String eventType = rs.getString("event_type");
+                   String eventData = rs.getString("event_data");
+                   return objectMapper.readValue(eventData, Class.forName(eventType));
+               },
+               id.getValue()
+           );
+           return ImmutableList.copyOf(events);
        }
    }
    ```
@@ -951,19 +1096,19 @@ src/main/java/
 
        if (snapshot.isPresent()) {
            aggregate = deserializeSnapshot(snapshot.get());
-           fromVersion = snapshot.get().version();
+           fromVersion = snapshot.get().getVersion();
        } else {
            aggregate = new OrderBookAggregate(symbol);
        }
 
-       // 2. Load events since snapshot
-       List<DomainEvent> events = eventStore.loadEventsSince(symbol, fromVersion);
+       // 2. Load events since snapshot (returns ImmutableList)
+       ImmutableList<DomainEvent> events = eventStore.loadEventsSince(symbol, fromVersion);
        events.forEach(aggregate::apply);
 
        return aggregate;
    }
 
-   public void save(OrderBookAggregate aggregate, List<DomainEvent> newEvents) {
+   public void save(OrderBookAggregate aggregate, ImmutableList<DomainEvent> newEvents) {
        eventStore.save(aggregate.getId(), newEvents, aggregate.getVersion());
 
        // Every 100 events, create snapshot
@@ -998,15 +1143,21 @@ src/main/java/
 
 2. **Idempotency Keys:**
    ```java
-   public record PlaceOrderCommand(
-       OrderId orderId,        // Client-provided ID (UUID)
-       UserId userId,
-       Symbol symbol,
-       Side side,
-       BigDecimal price,
-       BigDecimal quantity,
-       String idempotencyKey   // Optional
-   ) implements Command {}
+   @Value.Immutable
+   public interface PlaceOrderCommand extends Command {
+       OrderId getOrderId();        // Client-provided ID (UUID)
+       UserId getUserId();
+       Symbol getSymbol();
+       Side getSide();
+       BigDecimal getPrice();
+       BigDecimal getQuantity();
+       Optional<String> getIdempotencyKey();   // Optional
+
+       @Override
+       default AggregateId getAggregateId() {
+           return AggregateId.of(getSymbol());
+       }
+   }
    ```
 
    - Store processed idempotency keys:
