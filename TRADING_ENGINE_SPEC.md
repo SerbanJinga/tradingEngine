@@ -151,44 +151,60 @@ CREATE INDEX idx_trades_user ON trades_view(buyer_id, executed_at DESC);
 
 ### ✅ 3. Immutable Domain Model
 
-Use **Immutables library** with **Guava collections** for all domain objects:
+Use **Java records** with **Guava collections** for all domain objects:
 
 ```java
-@Value.Immutable
-@JsonSerialize(as = ImmutableOrder.class)
-@JsonDeserialize(as = ImmutableOrder.class)
-public interface Order {
-    OrderId getId();
-    UserId getUserId();
-    Symbol getSymbol();
-    Side getSide();
-    OrderType getType();
-    BigDecimal getPrice();
-    BigDecimal getQuantity();
-    BigDecimal getFilledQuantity();
-    OrderStatus getStatus();
-    Instant getCreatedAt();
+public record Order(
+    OrderId orderId,
+    UserId userId,
+    Symbol symbol,
+    Side side,
+    OrderType type,
+    BigDecimal price,
+    BigDecimal quantity,
+    BigDecimal filledQuantity,
+    OrderStatus status,
+    Instant createdAt
+) {
+    // Validation in compact constructor
+    public Order {
+        if (orderId == null) throw new IllegalArgumentException("OrderId cannot be null");
+        if (price == null || price.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Price must be positive");
+        }
+        // ... more validation
+    }
 
-    // Builder support for "with" methods
-    default Order withFilledQuantity(BigDecimal newFilled) {
-        return ImmutableOrder.copyOf(this)
-            .withFilledQuantity(newFilled);
+    // Helper methods
+    public BigDecimal getRemainingQuantity() {
+        return quantity.subtract(filledQuantity);
+    }
+
+    public boolean isFilled() {
+        return filledQuantity.compareTo(quantity) == 0;
+    }
+
+    // Factory method
+    public static Order create(OrderId orderId, UserId userId, Symbol symbol,
+                              Side side, OrderType type, BigDecimal price, BigDecimal quantity) {
+        return new Order(orderId, userId, symbol, side, type, price, quantity,
+                        BigDecimal.ZERO, OrderStatus.OPEN, Instant.now());
+    }
+
+    // Copy with modifications
+    public Order withFilledQuantity(BigDecimal newFilled) {
+        OrderStatus newStatus = newFilled.compareTo(quantity) == 0 ? OrderStatus.FILLED
+                              : newFilled.compareTo(BigDecimal.ZERO) > 0 ? OrderStatus.PARTIALLY_FILLED
+                              : OrderStatus.OPEN;
+        return new Order(orderId, userId, symbol, side, type,
+                        price, quantity, newFilled, newStatus, createdAt);
     }
 }
 
 // Usage:
-Order order = ImmutableOrder.builder()
-    .id(orderId)
-    .userId(userId)
-    .symbol(symbol)
-    .side(Side.BUY)
-    .type(OrderType.LIMIT)
-    .price(new BigDecimal("50000.00"))
-    .quantity(new BigDecimal("1.5"))
-    .filledQuantity(BigDecimal.ZERO)
-    .status(OrderStatus.OPEN)
-    .createdAt(Instant.now())
-    .build();
+Order order = Order.create(orderId, userId, Symbol.of("BTC-USD"),
+    Side.BUY, OrderType.LIMIT,
+    new BigDecimal("50000.00"), new BigDecimal("1.5"));
 ```
 
 **Collections - Use Guava Immutables:**
@@ -366,8 +382,8 @@ CREATE TABLE snapshots (
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| Language | Java 21 | Pattern matching, virtual threads, sealed classes |
-| Immutability | Immutables (org.immutables:value) | Generate immutable value objects with builders |
+| Language | Java 21 | Records, pattern matching, virtual threads, sealed classes |
+| Immutability | Java Records | Immutable value objects and domain models |
 | Collections | Guava | ImmutableList, ImmutableMap, ImmutableSet |
 | Framework | Spring Boot 3.2+ | REST, DI (infrastructure only) |
 | Database | PostgreSQL 16 | Event store + projections |
@@ -375,7 +391,7 @@ CREATE TABLE snapshots (
 | Messaging | Kafka | External event publishing (Iteration 9) |
 | Testing | JUnit 5, AssertJ, Testcontainers | Unit + integration tests |
 | Build | Maven | Multi-module dependency management |
-| JSON | Jackson | Event serialization (works with Immutables) |
+| JSON | Jackson | Event serialization (works with records) |
 
 ---
 
@@ -386,11 +402,11 @@ CREATE TABLE snapshots (
 **Goal:** Build core domain logic with zero dependencies.
 
 **Deliverables:**
-1. **Domain Objects** (Immutables + Guava):
-   - `OrderId`, `UserId`, `Symbol` - value objects using @Value.Immutable
+1. **Domain Objects** (Java Records + Guava):
+   - `OrderId`, `UserId`, `Symbol` - value object records with validation
    - `Side`, `OrderType`, `OrderStatus` - enums
-   - `Order` - @Value.Immutable interface
-   - `Trade` - @Value.Immutable interface
+   - `Order` - record with validation and helper methods
+   - `Trade` - record representing executed trades
 
 2. **OrderBook Class:**
    ```java
@@ -450,49 +466,95 @@ src/main/java/
 
 1. **Command Objects:**
    ```java
-   @Value.Immutable
-   @JsonSerialize(as = ImmutablePlaceOrderCommand.class)
-   @JsonDeserialize(as = ImmutablePlaceOrderCommand.class)
-   public interface PlaceOrderCommand extends Command {
-       OrderId getOrderId();
-       UserId getUserId();
-       Symbol getSymbol();
-       Side getSide();
-       BigDecimal getPrice();
-       BigDecimal getQuantity();
-
-       @Override
-       default AggregateId getAggregateId() {
-           return AggregateId.of(getSymbol());
+   public record PlaceOrderCommand(
+       OrderId orderId,
+       UserId userId,
+       Symbol symbol,
+       Side side,
+       OrderType type,
+       BigDecimal price,
+       BigDecimal quantity
+   ) {
+       public PlaceOrderCommand {
+           if (orderId == null) throw new IllegalArgumentException("OrderId cannot be null");
+           if (userId == null) throw new IllegalArgumentException("UserId cannot be null");
+           if (symbol == null) throw new IllegalArgumentException("Symbol cannot be null");
+           if (price == null || price.compareTo(BigDecimal.ZERO) <= 0) {
+               throw new IllegalArgumentException("Price must be positive");
+           }
+           if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+               throw new IllegalArgumentException("Quantity must be positive");
+           }
        }
    }
 
-   @Value.Immutable
-   public interface CancelOrderCommand extends Command {
-       OrderId getOrderId();
-       UserId getUserId();
-       Symbol getSymbol();
-
-       @Override
-       default AggregateId getAggregateId() {
-           return AggregateId.of(getSymbol());
+   public record CancelOrderCommand(
+       OrderId orderId,
+       UserId userId,
+       Symbol symbol
+   ) {
+       public CancelOrderCommand {
+           if (orderId == null) throw new IllegalArgumentException("OrderId cannot be null");
+           if (userId == null) throw new IllegalArgumentException("UserId cannot be null");
+           if (symbol == null) throw new IllegalArgumentException("Symbol cannot be null");
        }
    }
    ```
 
 2. **Domain Events:**
    ```java
-   @Value.Immutable
-   @JsonSerialize(as = ImmutableOrderPlacedEvent.class)
-   @JsonDeserialize(as = ImmutableOrderPlacedEvent.class)
-   public interface OrderPlacedEvent extends DomainEvent {
-       UUID getEventId();
-       OrderId getOrderId();
-       UserId getUserId();
-       Symbol getSymbol();
-       Side getSide();
-       BigDecimal getPrice();
-       BigDecimal getQuantity();
+   public record OrderPlacedEvent(
+       String eventId,
+       AggregateId aggregateId,
+       Instant occurredAt,
+       OrderId orderId,
+       UserId userId,
+       Symbol symbol,
+       Side side,
+       OrderType type,
+       BigDecimal price,
+       BigDecimal quantity
+   ) implements DomainEvent {
+       public OrderPlacedEvent {
+           if (eventId == null || eventId.isBlank()) {
+               throw new IllegalArgumentException("EventId cannot be null or blank");
+           }
+           // ... more validation
+       }
+
+       public static OrderPlacedEvent create(AggregateId aggregateId, OrderId orderId,
+                                            UserId userId, Symbol symbol, Side side,
+                                            OrderType type, BigDecimal price, BigDecimal quantity) {
+           return new OrderPlacedEvent(UUID.randomUUID().toString(), aggregateId,
+                                      Instant.now(), orderId, userId, symbol, side, type, price, quantity);
+       }
+
+       @Override
+       public String getEventId() { return eventId; }
+
+       @Override
+       public AggregateId getAggregateId() { return aggregateId; }
+
+       @Override
+       public Instant getOccurredAt() { return occurredAt; }
+
+       @Override
+       public String getEventType() { return "OrderPlaced"; }
+   }
+
+   public record TradeExecutedEvent(
+       String eventId,
+       AggregateId aggregateId,
+       Instant occurredAt,
+       String tradeId,
+       Symbol symbol,
+       OrderId makerOrderId,
+       OrderId takerOrderId,
+       UserId makerId,
+       UserId takerId,
+       Side makerSide,
+       BigDecimal price,
+       BigDecimal quantity
        Instant getOccurredAt();
 
        @Override
@@ -501,29 +563,9 @@ src/main/java/
        }
    }
 
-   @Value.Immutable
-   public interface TradeExecutedEvent extends DomainEvent {
-       UUID getEventId();
-       Symbol getSymbol();
-       OrderId getMakerOrderId();
-       OrderId getTakerOrderId();
-       UserId getMakerId();
-       UserId getTakerId();
-       BigDecimal getPrice();
-       BigDecimal getQuantity();
-       Instant getOccurredAt();
+   public record OrderCancelledEvent(...) implements DomainEvent { /* ... */ }
 
-       @Override
-       default AggregateId getAggregateId() {
-           return AggregateId.of(getSymbol());
-       }
-   }
-
-   @Value.Immutable
-   public interface OrderCancelledEvent extends DomainEvent { /* ... */ }
-
-   @Value.Immutable
-   public interface OrderFilledEvent extends DomainEvent { /* ... */ }
+   public record OrderFilledEvent(...) implements DomainEvent { /* ... */ }
    ```
 
 3. **OrderBookAggregate:**
@@ -696,34 +738,28 @@ src/main/java/
 
        @Transactional
        public OrderId placeOrder(PlaceOrderCommand command) {
-           OrderBookAggregate aggregate = repository.load(command.getSymbol());
+           OrderBookAggregate aggregate = repository.load(command.symbol());
            ImmutableList<DomainEvent> events = aggregate.handle(command);
            repository.save(aggregate, events);
-           return command.getOrderId();
+           return command.orderId();
        }
    }
    ```
 
-4. **DTOs (input/output) - Use Immutables for REST DTOs too:**
+4. **DTOs (input/output) - Use Java records for REST DTOs:**
    ```java
-   @Value.Immutable
-   @JsonSerialize(as = ImmutablePlaceOrderRequest.class)
-   @JsonDeserialize(as = ImmutablePlaceOrderRequest.class)
-   public interface PlaceOrderRequest {
-       @NotNull String getSymbol();
-       @NotNull String getSide();
-       @NotNull @Positive BigDecimal getPrice();
-       @NotNull @Positive BigDecimal getQuantity();
-   }
+   public record PlaceOrderRequest(
+       @NotNull String symbol,
+       @NotNull String side,
+       @NotNull @Positive BigDecimal price,
+       @NotNull @Positive BigDecimal quantity
+   ) {}
 
-   @Value.Immutable
-   @JsonSerialize(as = ImmutableOrderResponse.class)
-   @JsonDeserialize(as = ImmutableOrderResponse.class)
-   public interface OrderResponse {
-       String getOrderId();
-       String getStatus();
-       Instant getCreatedAt();
-   }
+   public record OrderResponse(
+       String orderId,
+       String status,
+       Instant createdAt
+   ) {}
    ```
 
 5. **Query Endpoints (read from in-memory projection):**
@@ -1143,10 +1179,9 @@ src/main/java/
 
 2. **Idempotency Keys:**
    ```java
-   @Value.Immutable
-   public interface PlaceOrderCommand extends Command {
-       OrderId getOrderId();        // Client-provided ID (UUID)
-       UserId getUserId();
+   public record PlaceOrderCommand(
+       OrderId orderId,             // Client-provided ID (UUID)
+       UserId userId,
        Symbol getSymbol();
        Side getSide();
        BigDecimal getPrice();

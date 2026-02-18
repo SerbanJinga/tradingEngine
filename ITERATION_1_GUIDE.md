@@ -12,6 +12,20 @@ Build core domain logic with **zero external dependencies**.
 **Module:** `domain`
 **Tests Required:** 100% coverage on matching logic
 
+## 💡 Implementation Approach
+
+**Immutability:** We use **Java records** (not Immutables library) for all domain objects:
+- ✅ Zero external dependencies
+- ✅ Built-in immutability
+- ✅ Compact constructor for validation
+- ✅ Automatic getters (accessors)
+- ✅ No code generation needed
+
+**Collections:** We use **Guava's Immutable collections** (ImmutableList, ImmutableMap):
+- Only external dependency in domain module
+- Guarantees immutability at runtime
+- Better than Collections.unmodifiableList()
+
 ---
 
 ## 📋 Deliverables Checklist
@@ -131,37 +145,34 @@ public enum OrderStatus {
 ```java
 package com.trading.domain.model;
 
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
-import org.immutables.value.Value;
-
 import java.util.UUID;
 
 /**
- * Strongly-typed order identifier
+ * Unique identifier for an Order.
+ * Value object represented as a record.
  */
-@Value.Immutable
-@JsonSerialize(as = ImmutableOrderId.class)
-@JsonDeserialize(as = ImmutableOrderId.class)
-public interface OrderId {
-    @Value.Parameter
-    String getValue();
+public record OrderId(String value) {
 
-    static OrderId of(String value) {
-        return ImmutableOrderId.of(value);
+    public OrderId {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("OrderId value cannot be null or blank");
+        }
     }
 
-    static OrderId generate() {
-        return ImmutableOrderId.of(UUID.randomUUID().toString());
+    /**
+     * Generates a new unique OrderId.
+     */
+    public static OrderId generate() {
+        return new OrderId(UUID.randomUUID().toString());
     }
 }
 ```
 
 **Key Points:**
-- `@Value.Immutable` → Generates `ImmutableOrderId.java`
-- `@Value.Parameter` → Allows `OrderId.of("value")` syntax
-- `generate()` → Creates new random ID
-- Jackson annotations → JSON serialization (used in Iteration 5+)
+- Java record provides immutability automatically
+- Compact constructor for validation
+- Factory method `generate()` for creating new IDs
+- No external dependencies needed
 
 ---
 
@@ -172,22 +183,23 @@ public interface OrderId {
 ```java
 package com.trading.domain.model;
 
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
-import org.immutables.value.Value;
-
 /**
- * Strongly-typed user identifier
+ * Unique identifier for a User.
+ * Value object represented as a record.
  */
-@Value.Immutable
-@JsonSerialize(as = ImmutableUserId.class)
-@JsonDeserialize(as = ImmutableUserId.class)
-public interface UserId {
-    @Value.Parameter
-    String getValue();
+public record UserId(String value) {
 
-    static UserId of(String value) {
-        return ImmutableUserId.of(value);
+    public UserId {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("UserId value cannot be null or blank");
+        }
+    }
+
+    /**
+     * Creates a UserId from a string value.
+     */
+    public static UserId of(String value) {
+        return new UserId(value);
     }
 }
 ```
@@ -201,46 +213,55 @@ public interface UserId {
 ```java
 package com.trading.domain.model;
 
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
-import org.immutables.value.Value;
+import java.util.regex.Pattern;
 
 /**
- * Trading pair symbol (e.g., BTC-USD, ETH-USDT)
- * Format: BASE-QUOTE (e.g., BTC-USD means trading Bitcoin for USD)
+ * Trading symbol (e.g., "BTC-USD", "ETH-USDT").
+ * Format: BASE-QUOTE where both are uppercase letters.
+ * Value object represented as a record.
  */
-@Value.Immutable
-@JsonSerialize(as = ImmutableSymbol.class)
-@JsonDeserialize(as = ImmutableSymbol.class)
-public interface Symbol {
-    @Value.Parameter
-    String getValue();
+public record Symbol(String value) {
 
-    static Symbol of(String value) {
-        return ImmutableSymbol.of(value.toUpperCase());
+    private static final Pattern SYMBOL_PATTERN = Pattern.compile("^[A-Z]+-[A-Z]+$");
+
+    public Symbol {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("Symbol value cannot be null or blank");
+        }
+        if (!SYMBOL_PATTERN.matcher(value).matches()) {
+            throw new IllegalArgumentException(
+                "Symbol must be in format BASE-QUOTE (e.g., BTC-USD). Got: " + value
+            );
+        }
     }
 
     /**
-     * Validation runs on construction
+     * Creates a Symbol from a string value.
      */
-    @Value.Check
-    default void check() {
-        if (getValue() == null || getValue().isEmpty()) {
-            throw new IllegalArgumentException("Symbol cannot be empty");
-        }
-        if (!getValue().matches("[A-Z]+-[A-Z]+")) {
-            throw new IllegalArgumentException(
-                "Symbol must be in format XXX-YYY (e.g., BTC-USD)"
-            );
-        }
+    public static Symbol of(String value) {
+        return new Symbol(value);
+    }
+
+    /**
+     * Gets the base currency (e.g., "BTC" from "BTC-USD").
+     */
+    public String getBase() {
+        return value.split("-")[0];
+    }
+
+    /**
+     * Gets the quote currency (e.g., "USD" from "BTC-USD").
+     */
+    public String getQuote() {
+        return value.split("-")[1];
     }
 }
 ```
 
 **Validation Examples:**
 - ✅ `Symbol.of("BTC-USD")` → valid
-- ✅ `Symbol.of("btc-usd")` → converts to "BTC-USD"
-- ❌ `Symbol.of("BTCUSD")` → throws exception
+- ❌ `Symbol.of("btc-usd")` → throws exception (must be uppercase)
+- ❌ `Symbol.of("BTCUSD")` → throws exception (missing hyphen)
 - ❌ `Symbol.of("")` → throws exception
 
 ---
@@ -252,33 +273,32 @@ public interface Symbol {
 ```java
 package com.trading.domain.model;
 
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
-import org.immutables.value.Value;
-
 /**
- * Aggregate root identifier for event sourcing.
- * Used in Iteration 2+ for event store.
+ * Unique identifier for aggregates in the event-sourced system.
+ * Combines a value with a type for type-safe aggregate identification.
+ * Value object represented as a record.
  */
-@Value.Immutable
-@JsonSerialize(as = ImmutableAggregateId.class)
-@JsonDeserialize(as = ImmutableAggregateId.class)
-public interface AggregateId {
-    @Value.Parameter
-    String getValue();
+public record AggregateId(String value, String type) {
 
-    String getType();  // e.g., "OrderBook", "Position"
+    public AggregateId {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("AggregateId value cannot be null or blank");
+        }
+        if (type == null || type.isBlank()) {
+            throw new IllegalArgumentException("AggregateId type cannot be null or blank");
+        }
+    }
 
-    static AggregateId of(Symbol symbol) {
-        return ImmutableAggregateId.builder()
-            .value(symbol.getValue())
-            .type("OrderBook")
-            .build();
+    /**
+     * Creates an AggregateId for an OrderBook.
+     */
+    public static AggregateId forOrderBook(Symbol symbol) {
+        return new AggregateId(symbol.value(), "OrderBook");
     }
 }
 ```
 
-**Note:** Used in Iteration 2+ for aggregate identification
+**Note:** Used for aggregate identification in event sourcing
 
 ---
 
@@ -291,123 +311,171 @@ public interface AggregateId {
 ```java
 package com.trading.domain.model;
 
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
-import org.immutables.value.Value;
-
 import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
- * Immutable order representation.
- * All modifications return new instances.
+ * Represents a trading order in the system.
+ * Immutable domain entity represented as a record.
  */
-@Value.Immutable
-@JsonSerialize(as = ImmutableOrder.class)
-@JsonDeserialize(as = ImmutableOrder.class)
-public interface Order {
-    OrderId getId();
-    UserId getUserId();
-    Symbol getSymbol();
-    Side getSide();
-    OrderType getType();
-    BigDecimal getPrice();
-    BigDecimal getQuantity();
-    BigDecimal getFilledQuantity();
-    OrderStatus getStatus();
-    Instant getCreatedAt();
+public record Order(
+    OrderId orderId,
+    UserId userId,
+    Symbol symbol,
+    Side side,
+    OrderType type,
+    BigDecimal price,
+    BigDecimal quantity,
+    BigDecimal filledQuantity,
+    OrderStatus status,
+    Instant createdAt
+) {
 
-    /**
-     * Calculate remaining unfilled quantity
-     */
-    default BigDecimal getRemainingQuantity() {
-        return getQuantity().subtract(getFilledQuantity());
-    }
-
-    /**
-     * Check if order is completely filled
-     */
-    default boolean isFilled() {
-        return getStatus() == OrderStatus.FILLED;
-    }
-
-    /**
-     * Check if order is still active (can be matched)
-     */
-    default boolean isOpen() {
-        return getStatus() == OrderStatus.OPEN ||
-               getStatus() == OrderStatus.PARTIALLY_FILLED;
-    }
-
-    /**
-     * Create a copy with updated filled quantity.
-     * Automatically updates status based on fill level.
-     */
-    default Order withFilledQuantity(BigDecimal newFilled) {
-        return ImmutableOrder.copyOf(this)
-            .withFilledQuantity(newFilled)
-            .withStatus(determineStatus(newFilled));
-    }
-
-    /**
-     * Determine order status based on filled quantity
-     */
-    private OrderStatus determineStatus(BigDecimal filled) {
-        if (filled.compareTo(BigDecimal.ZERO) == 0) {
-            return OrderStatus.OPEN;
-        } else if (filled.compareTo(getQuantity()) < 0) {
-            return OrderStatus.PARTIALLY_FILLED;
-        } else {
-            return OrderStatus.FILLED;
+    public Order {
+        if (orderId == null) {
+            throw new IllegalArgumentException("OrderId cannot be null");
         }
-    }
-
-    /**
-     * Validation runs on construction
-     */
-    @Value.Check
-    default void check() {
-        if (getPrice().compareTo(BigDecimal.ZERO) <= 0) {
+        if (userId == null) {
+            throw new IllegalArgumentException("UserId cannot be null");
+        }
+        if (symbol == null) {
+            throw new IllegalArgumentException("Symbol cannot be null");
+        }
+        if (side == null) {
+            throw new IllegalArgumentException("Side cannot be null");
+        }
+        if (type == null) {
+            throw new IllegalArgumentException("OrderType cannot be null");
+        }
+        if (price == null || price.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("Price must be positive");
         }
-        if (getQuantity().compareTo(BigDecimal.ZERO) <= 0) {
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("Quantity must be positive");
         }
-        if (getFilledQuantity().compareTo(BigDecimal.ZERO) < 0) {
-            throw new IllegalArgumentException("Filled quantity cannot be negative");
+        if (filledQuantity == null || filledQuantity.compareTo(BigDecimal.ZERO) < 0) {
+            throw new IllegalArgumentException("FilledQuantity cannot be negative");
         }
-        if (getFilledQuantity().compareTo(getQuantity()) > 0) {
-            throw new IllegalArgumentException("Filled quantity cannot exceed total quantity");
+        if (filledQuantity.compareTo(quantity) > 0) {
+            throw new IllegalArgumentException("FilledQuantity cannot exceed quantity");
+        }
+        if (status == null) {
+            throw new IllegalArgumentException("Status cannot be null");
+        }
+        if (createdAt == null) {
+            throw new IllegalArgumentException("CreatedAt cannot be null");
         }
     }
 
     /**
-     * Builder with sensible defaults
+     * Creates a new order with default values for filled quantity and creation time.
      */
-    static ImmutableOrder.Builder builder() {
-        return ImmutableOrder.builder()
-            .filledQuantity(BigDecimal.ZERO)
-            .status(OrderStatus.OPEN)
-            .createdAt(Instant.now());
+    public static Order create(
+        OrderId orderId,
+        UserId userId,
+        Symbol symbol,
+        Side side,
+        OrderType type,
+        BigDecimal price,
+        BigDecimal quantity
+    ) {
+        return new Order(
+            orderId,
+            userId,
+            symbol,
+            side,
+            type,
+            price,
+            quantity,
+            BigDecimal.ZERO,
+            OrderStatus.OPEN,
+            Instant.now()
+        );
+    }
+
+    /**
+     * Gets the remaining (unfilled) quantity.
+     */
+    public BigDecimal getRemainingQuantity() {
+        return quantity.subtract(filledQuantity);
+    }
+
+    /**
+     * Checks if the order is completely filled.
+     */
+    public boolean isFilled() {
+        return filledQuantity.compareTo(quantity) == 0;
+    }
+
+    /**
+     * Checks if the order is open (not filled and not cancelled).
+     */
+    public boolean isOpen() {
+        return status == OrderStatus.OPEN || status == OrderStatus.PARTIALLY_FILLED;
+    }
+
+    /**
+     * Creates a copy with updated filled quantity.
+     */
+    public Order withFilledQuantity(BigDecimal newFilled) {
+        OrderStatus newStatus;
+        if (newFilled.compareTo(quantity) == 0) {
+            newStatus = OrderStatus.FILLED;
+        } else if (newFilled.compareTo(BigDecimal.ZERO) > 0) {
+            newStatus = OrderStatus.PARTIALLY_FILLED;
+        } else {
+            newStatus = OrderStatus.OPEN;
+        }
+
+        return new Order(
+            orderId,
+            userId,
+            symbol,
+            side,
+            type,
+            price,
+            quantity,
+            newFilled,
+            newStatus,
+            createdAt
+        );
+    }
+
+    /**
+     * Creates a copy with cancelled status.
+     */
+    public Order withCancelledStatus() {
+        return new Order(
+            orderId,
+            userId,
+            symbol,
+            side,
+            type,
+            price,
+            quantity,
+            filledQuantity,
+            OrderStatus.CANCELLED,
+            createdAt
+        );
     }
 }
 ```
 
 **Usage Example:**
 ```java
-Order order = Order.builder()
-    .id(OrderId.generate())
-    .userId(UserId.of("user-123"))
-    .symbol(Symbol.of("BTC-USD"))
-    .side(Side.BUY)
-    .type(OrderType.LIMIT)
-    .price(new BigDecimal("50000.00"))
-    .quantity(new BigDecimal("1.5"))
-    .build();
+Order order = Order.create(
+    OrderId.generate(),
+    UserId.of("user-123"),
+    Symbol.of("BTC-USD"),
+    Side.BUY,
+    OrderType.LIMIT,
+    new BigDecimal("50000.00"),
+    new BigDecimal("1.5")
+);
 
 // Create modified copy
 Order filled = order.withFilledQuantity(new BigDecimal("0.5"));
-// filled.getStatus() == OrderStatus.PARTIALLY_FILLED
+// filled.status() == OrderStatus.PARTIALLY_FILLED
 ```
 
 ---
@@ -419,90 +487,122 @@ Order filled = order.withFilledQuantity(new BigDecimal("0.5"));
 ```java
 package com.trading.domain.model;
 
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
-import org.immutables.value.Value;
-
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
 /**
  * Represents an executed trade between two orders.
- * Maker = order already in the book
- * Taker = incoming order that matched
+ * Immutable domain entity represented as a record.
  */
-@Value.Immutable
-@JsonSerialize(as = ImmutableTrade.class)
-@JsonDeserialize(as = ImmutableTrade.class)
-public interface Trade {
-    @Value.Default
-    default String getTradeId() {
-        return UUID.randomUUID().toString();
-    }
+public record Trade(
+    String tradeId,
+    Symbol symbol,
+    OrderId makerOrderId,
+    OrderId takerOrderId,
+    UserId makerId,
+    UserId takerId,
+    Side makerSide,
+    BigDecimal price,
+    BigDecimal quantity,
+    Instant executedAt
+) {
 
-    Symbol getSymbol();
-    OrderId getMakerOrderId();    // Order already in the book
-    OrderId getTakerOrderId();    // Incoming order that matched
-    UserId getMakerId();
-    UserId getTakerId();
-    BigDecimal getPrice();        // Execution price (maker's price)
-    BigDecimal getQuantity();     // Amount traded
-    Side getMakerSide();          // Maker's side (BUY or SELL)
-
-    @Value.Default
-    default Instant getExecutedAt() {
-        return Instant.now();
-    }
-
-    /**
-     * Taker side is opposite of maker
-     */
-    default Side getTakerSide() {
-        return getMakerSide() == Side.BUY ? Side.SELL : Side.BUY;
-    }
-
-    /**
-     * Determine who bought (for settlements)
-     */
-    default UserId getBuyerId() {
-        return getMakerSide() == Side.BUY ? getMakerId() : getTakerId();
-    }
-
-    /**
-     * Determine who sold (for settlements)
-     */
-    default UserId getSellerId() {
-        return getMakerSide() == Side.SELL ? getMakerId() : getTakerId();
-    }
-
-    /**
-     * Validation runs on construction
-     */
-    @Value.Check
-    default void check() {
-        if (getPrice().compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("Trade price must be positive");
+    public Trade {
+        if (tradeId == null || tradeId.isBlank()) {
+            throw new IllegalArgumentException("TradeId cannot be null or blank");
         }
-        if (getQuantity().compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("Trade quantity must be positive");
+        if (symbol == null) {
+            throw new IllegalArgumentException("Symbol cannot be null");
         }
+        if (makerOrderId == null) {
+            throw new IllegalArgumentException("MakerOrderId cannot be null");
+        }
+        if (takerOrderId == null) {
+            throw new IllegalArgumentException("TakerOrderId cannot be null");
+        }
+        if (makerId == null) {
+            throw new IllegalArgumentException("MakerId cannot be null");
+        }
+        if (takerId == null) {
+            throw new IllegalArgumentException("TakerId cannot be null");
+        }
+        if (makerSide == null) {
+            throw new IllegalArgumentException("MakerSide cannot be null");
+        }
+        if (price == null || price.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Price must be positive");
+        }
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Quantity must be positive");
+        }
+        if (executedAt == null) {
+            throw new IllegalArgumentException("ExecutedAt cannot be null");
+        }
+    }
+
+    /**
+     * Creates a new trade with generated ID and current timestamp.
+     */
+    public static Trade create(
+        Symbol symbol,
+        OrderId makerOrderId,
+        OrderId takerOrderId,
+        UserId makerId,
+        UserId takerId,
+        Side makerSide,
+        BigDecimal price,
+        BigDecimal quantity
+    ) {
+        return new Trade(
+            UUID.randomUUID().toString(),
+            symbol,
+            makerOrderId,
+            takerOrderId,
+            makerId,
+            takerId,
+            makerSide,
+            price,
+            quantity,
+            Instant.now()
+        );
+    }
+
+    /**
+     * Gets the taker's side (opposite of maker's side).
+     */
+    public Side getTakerSide() {
+        return makerSide == Side.BUY ? Side.SELL : Side.BUY;
+    }
+
+    /**
+     * Gets the buyer's user ID.
+     */
+    public UserId getBuyerId() {
+        return makerSide == Side.BUY ? makerId : takerId;
+    }
+
+    /**
+     * Gets the seller's user ID.
+     */
+    public UserId getSellerId() {
+        return makerSide == Side.SELL ? makerId : takerId;
     }
 }
 ```
 
 **Usage Example:**
 ```java
-Trade trade = ImmutableTrade.builder()
-    .symbol(Symbol.of("BTC-USD"))
-    .makerOrderId(makerOrder.getId())
-    .takerOrderId(takerOrder.getId())
-    .makerId(makerOrder.getUserId())
-    .takerId(takerOrder.getUserId())
-    .price(makerOrder.getPrice())  // Maker's price wins
-    .quantity(new BigDecimal("0.5"))
-    .makerSide(makerOrder.getSide())
-    .build();
+Trade trade = Trade.create(
+    Symbol.of("BTC-USD"),
+    makerOrder.orderId(),
+    takerOrder.orderId(),
+    makerOrder.userId(),
+    takerOrder.userId(),
+    makerOrder.side(),
+    makerOrder.price(),  // Maker's price wins
+    new BigDecimal("0.5")
+);
 ```
 
 ---
@@ -516,34 +616,53 @@ Trade trade = ImmutableTrade.builder()
 ```java
 package com.trading.domain.model;
 
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.google.common.collect.ImmutableList;
-import org.immutables.value.Value;
 
 /**
- * Result of attempting to match an order.
- * Contains the updated order and any trades executed.
+ * Represents the result of matching an order against an order book.
+ * Contains the updated order and any trades that were executed.
+ * Immutable result object represented as a record.
  */
-@Value.Immutable
-@JsonSerialize(as = ImmutableMatchResult.class)
-@JsonDeserialize(as = ImmutableMatchResult.class)
-public interface MatchResult {
-    Order getOrder();                      // Order with updated filled quantity
-    ImmutableList<Trade> getTrades();      // Trades executed during matching
+public record MatchResult(
+    Order order,
+    ImmutableList<Trade> trades
+) {
 
-    static ImmutableMatchResult.Builder builder() {
-        return ImmutableMatchResult.builder();
+    public MatchResult {
+        if (order == null) {
+            throw new IllegalArgumentException("Order cannot be null");
+        }
+        if (trades == null) {
+            throw new IllegalArgumentException("Trades cannot be null");
+        }
     }
 
     /**
-     * Helper for no-match scenario
+     * Creates a MatchResult with no trades (order added to book without matching).
      */
-    static MatchResult noMatch(Order order) {
-        return ImmutableMatchResult.builder()
-            .order(order)
-            .trades(ImmutableList.of())
-            .build();
+    public static MatchResult noMatch(Order order) {
+        return new MatchResult(order, ImmutableList.of());
+    }
+
+    /**
+     * Creates a MatchResult with trades.
+     */
+    public static MatchResult withTrades(Order order, ImmutableList<Trade> trades) {
+        return new MatchResult(order, trades);
+    }
+
+    /**
+     * Checks if any trades were executed.
+     */
+    public boolean hasMatches() {
+        return !trades.isEmpty();
+    }
+
+    /**
+     * Gets the number of trades executed.
+     */
+    public int getTradeCount() {
+        return trades.size();
     }
 }
 ```

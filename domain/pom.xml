@@ -16,23 +16,10 @@
     <description>Pure domain model with zero framework dependencies</description>
 
     <dependencies>
-        <!-- Immutables (annotation processor) -->
-        <dependency>
-            <groupId>org.immutables</groupId>
-            <artifactId>value</artifactId>
-            <scope>provided</scope>
-        </dependency>
-
-        <!-- Guava -->
+        <!-- Guava (for ImmutableList/ImmutableMap) -->
         <dependency>
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
-        </dependency>
-
-        <!-- Jackson annotations (for JSON serialization metadata) -->
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-annotations</artifactId>
         </dependency>
 
         <!-- Testing -->
